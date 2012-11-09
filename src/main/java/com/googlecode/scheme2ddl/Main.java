@@ -1,45 +1,34 @@
-/*
- *    Copyright (c) 2011 Reshetnikov Anton aka qwazer
- *
- *    Licensed under the Apache License, Version 2.0 (the "License");
- *    you may not use this file except in compliance with the License.
- *    You may obtain a copy of the License at
- *
- *        http://www.apache.org/licenses/LICENSE-2.0
- *
- *    Unless required by applicable law or agreed to in writing, software
- *    distributed under the License is distributed on an "AS IS" BASIS,
- *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *    See the License for the specific language governing permissions and
- *    limitations under the License.
- */
-
 package com.googlecode.scheme2ddl;
 
+import com.googlecode.scheme2ddl.dao.UserObjectDao;
 import oracle.jdbc.pool.OracleDataSource;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.support.ClassPathXmlApplicationContext;
+import org.springframework.context.support.FileSystemXmlApplicationContext;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 
 import java.sql.SQLException;
 
 /**
- * Created by IntelliJ IDEA.
- * User: Reshetnikov AV resheto@gmail.com
- * Date: 20.02.11
- * Time: 10:27
+ * @author A_Reshetnikov
+ * @since Date: 17.10.2012
  */
 public class Main {
 
+    public static String outputPath = null;
+    public static int parallelCount = 4;
     private static boolean justPrintUsage = false;
     private static boolean justPrintVersion = false;
     private static boolean justTestConnection = false;
+    private static String customConfigLocation = null;
+    private static String defaultConfigLocation = "scheme2ddl.config.xml";
     private static String dbUrl = null;
-    public static String outputDir = null;
-    public static boolean includeStorageInfo = false;
+
+    private static final Log log = LogFactory.getLog(Main.class);
 
     public static void main(String[] args) throws Exception {
-
-//        IWorker worker = (IWorker) SpringUtils.getSpringBean("worker");
-//
-//        worker.work();
         collectArgs(args);
         if (justPrintUsage) {
             printUsage();
@@ -49,78 +38,56 @@ public class Main {
             printVersion();
             return;
         }
-        Worker worker = (Worker) SpringUtils.getSpringBean("worker");
-        if (dbUrl != null || outputDir != null || includeStorageInfo) {
-            modifyWorkerConfig(worker);
-        }
+
+        ConfigurableApplicationContext context = loadApplicationContext();
+
+        modifyContext(context);
+
         if (justTestConnection) {
-            testDBConnection(worker);
-        } else
-            worker.work();
-
-    }
-
-    private static void modifyWorkerConfig(Worker worker) throws Exception {
-        if (dbUrl != null) {
-            OracleDataSource ds = new OracleDataSource();
-            ds.setURL("jdbc:oracle:thin:" + dbUrl);
-            worker.getDao().setDataSource(ds);
-        }
-        if (outputDir != null) {
-            worker.getFileWorker().setOutputPath(outputDir);
-        }
-    }
-
-    private static void testDBConnection(Worker worker) throws Exception {
-        if (worker.getDao().connectionAvailable()) {
-            System.out.println("OK success connection to " + getCurrentDBURL(worker));
+            testDBConnection(context);
         } else {
-            System.out.println("FAIL connect to " + getCurrentDBURL(worker));
+            new UserObjectJobRunner().start(context);
         }
     }
 
-    private static String getCurrentDBURL(Worker worker) throws SQLException {
-        OracleDataSource ods = (OracleDataSource) worker.getDao().getDataSource();
-        return ods.getURL() ;
-    }
-
-    private static void collectArgs(String[] args) throws Exception {
-
-        for (int i = 0; i < args.length; i++) {
-            String arg = args[i];
-            if (arg.equals("-help") || arg.equals("-h")) {
-                justPrintUsage = true;
-            } else if (arg.equals("-url")) {
-                dbUrl = args[i + 1];
-                i++;
-            } else if (arg.equals("-o") || arg.equals("-output")) {
-                outputDir = args[i + 1];
-                i++;
-                createDir();
-            } else if (arg.equals("-tc") || arg.equals("--test-connection")) {
-                justTestConnection = true;
-            } else if (arg.equals("-version")) {
-                justPrintVersion = true;
-            } else if (arg.startsWith("-")) {
-                // we don't have any more args to recognize!
-                String msg = "Unknown argument: " + arg;
-                System.err.println(msg);
-                printUsage();
-                throw new Exception("");
-            }
+    private static void testDBConnection(ConfigurableApplicationContext context) throws SQLException {
+        UserObjectDao dao = (UserObjectDao) context.getBean("userObjectDao");
+        OracleDataSource dataSource = (OracleDataSource) context.getBean("dataSource");
+        if (dao.isConnectionAvailable()) {
+            System.out.println("OK success connection to " + dataSource.getURL());
+        } else {
+            System.out.println("FAIL connect to " + dataSource.getURL());
         }
     }
 
-    private static void createDir() throws Exception {
-        if (!outputDir.endsWith("\\")) {
-            outputDir += "\\";
+    private static void modifyContext(ConfigurableApplicationContext context) {
+        if (dbUrl != null) {
+            String url = "jdbc:oracle:thin:" + dbUrl;
+            String user = extractUserfromDbUrl(dbUrl);
+            String password = extractPasswordfromDbUrl(dbUrl);
+            OracleDataSource dataSource = (OracleDataSource) context.getBean("dataSource");
+            dataSource.setURL(url);
+            // for OracleDataSource in connectionCachingEnabled mode need explicitly set user and password
+            dataSource.setUser(user);
+            dataSource.setPassword(password);
         }
-        try {
-            //check for creating dir todo
-        } catch (Exception e) {
-            System.err.println("Cannot create output directory with name, exit");
-            throw new Exception("");
+        if (outputPath != null) {
+            UserObjectWriter writer = (UserObjectWriter) context.getBean("writer");
+            writer.setOutputPath(outputPath);
         }
+        if (parallelCount > 0) {
+            SimpleAsyncTaskExecutor taskExecutor = (SimpleAsyncTaskExecutor) context.getBean("taskExecutor");
+            taskExecutor.setConcurrencyLimit(parallelCount);
+        }
+    }
+
+    private static String extractUserfromDbUrl(String dbUrl) {
+        return dbUrl.split("/")[0];
+    }
+
+    private static String extractPasswordfromDbUrl(String dbUrl) {
+        //scott/tiger@localhost:1521:ORCL
+        return dbUrl.split("/|@")[1];
     }
 
     /**
@@ -139,19 +106,60 @@ public class Main {
         msg.append("  -url,                  DB connection URL" + lSep);
         msg.append("                         example: scott/tiger@localhost:1521:ORCL" + lSep);
 
-        msg.append("  -output, -o            output dir" + lSep);
-        msg.append("  -s,                    include storage info in DDL scripts (default no include)" + lSep);
+        msg.append("  -o, --output            output dir" + lSep);
+        msg.append("  -p, --parallel,        number of parallel thread (default 4)" + lSep);
+        msg.append("  -c, --config,          path to scheme2ddl config file (xml)" + lSep);
         msg.append("  --test-connection,-tc  test db connection available" + lSep);
         msg.append("  -version,              print version info and exit" + lSep);
         System.out.println(msg.toString());
     }
 
     private static void printVersion() {
-        System.out.println(getVersion());
+        System.out.println("scheme2ddl version " + getVersion());
     }
 
     private static String getVersion() {
         return Main.class.getPackage().getImplementationVersion();
     }
 
+    private static void collectArgs(String[] args) throws Exception {
+
+        for (int i = 0; i < args.length; i++) {
+            String arg = args[i];
+            if (arg.equals("-help") || arg.equals("-h") || arg.equals("--help")) {
+                justPrintUsage = true;
+            } else if (arg.equals("-url") || arg.equals("--url")) {
+                dbUrl = args[i + 1];
+                i++;
+            } else if (arg.equals("-o") || arg.equals("-output") || arg.equals("--output")) {
+                outputPath = args[i + 1];
+                i++;
+            } else if (arg.equals("-p") || arg.equals("--parallel") || arg.equals("-parallel")) {
+                parallelCount = Integer.parseInt(args[i + 1]);
+                i++;
+            } else if (arg.equals("-tc") || arg.equals("--test-connection")) {
+                justTestConnection = true;
+            } else if (arg.equals("-c") || arg.equals("--config")) {
+                customConfigLocation = args[i + 1];
+                i++;
+            } else if (arg.equals("-version")) {
+                justPrintVersion = true;
+            } else if (arg.startsWith("-")) {
+                // we don't have any more args to recognize!
+                String msg = "Unknown argument: " + arg;
+                System.err.println(msg);
+                printUsage();
+                throw new Exception("");
+            }
+        }
+    }
+
+    private static ConfigurableApplicationContext loadApplicationContext() {
+        ConfigurableApplicationContext context = null;
+        if (customConfigLocation != null)
+            context = new FileSystemXmlApplicationContext(customConfigLocation);
+        else
+            context = new ClassPathXmlApplicationContext(defaultConfigLocation);
+        return context;
+    }
 }
