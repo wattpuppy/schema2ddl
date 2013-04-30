@@ -19,6 +19,7 @@ public class UserObjectWriter implements ItemWriter<UserObject> {
 
     private static final Log log = LogFactory.getLog(UserObjectWriter.class);
     private String outputPath;
+    private String fileNameCase;
 
     public void write(List<? extends UserObject> data) throws Exception {
         if (data.size() > 0) {
@@ -27,23 +28,31 @@ public class UserObjectWriter implements ItemWriter<UserObject> {
     }
 
     public void writeUserObject(UserObject userObject) throws Exception {
-        String absoluteFileName = outputPath + "/" + userObject.getFileName();
+        String fileName = userObject.getFileName();
+        fileName = applyFileNameCaseRule(fileName);
+        String absoluteFileName = outputPath + "/" + fileName;
         absoluteFileName = FilenameUtils.separatorsToSystem(absoluteFileName);
         File file = new File(absoluteFileName);
         FileUtils.writeStringToFile(file, userObject.getDdl());
-        String schema = userObject.getSchema();
-        if (schema == null)
-            schema = "";
-        else
-            schema = "[" + schema + "]";
-        log.info(String.format("Saved %s %s %s to file %s",
-                schema,
-                userObject.getType(),
-                userObject.getName(),
+        log.info(String.format("Saved %s %s to file %s",
+                userObject.getType().toLowerCase(),
+                userObject.getName().toLowerCase(),
                 file.getAbsolutePath()));
+    }
+
+    private String applyFileNameCaseRule(String s) {
+        if (fileNameCase != null) {
+            if (fileNameCase.equalsIgnoreCase("lower")) return s.toLowerCase();
+            if (fileNameCase.equalsIgnoreCase("upper")) return s.toUpperCase();
+        }
+        return s;
     }
 
     public void setOutputPath(String outputPath) {
         this.outputPath = outputPath;
+    }
+
+    public void setFileNameCase(String fileNameCase) {
+        this.fileNameCase = fileNameCase;
     }
 }

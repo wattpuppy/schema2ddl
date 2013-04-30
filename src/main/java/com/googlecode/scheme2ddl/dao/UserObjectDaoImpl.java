@@ -1,9 +1,11 @@
 package com.googlecode.scheme2ddl.dao;
 
+import com.googlecode.scheme2ddl.TypeNamesUtil;
 import com.googlecode.scheme2ddl.domain.UserObject;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.jdbc.core.CallableStatementCallback;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.RowMapper;
@@ -12,6 +14,8 @@ import org.springframework.jdbc.core.support.JdbcDaoSupport;
 import java.sql.*;
 import java.util.List;
 import java.util.Map;
+
+import static com.googlecode.scheme2ddl.TypeNamesUtil.map2TypeForConfig;
 
 /**
  * @author A_Reshetnikov
@@ -22,78 +26,73 @@ public class UserObjectDaoImpl extends JdbcDaoSupport implements UserObjectDao {
     private static final Log log = LogFactory.getLog(UserObjectDaoImpl.class);
     private Map<String, Boolean> transformParams;
 
-    public List<UserObject> findListForProccessing(String schema) {
-        if (schema == null) {
-            return getJdbcTemplate().query(
-                    "select t.object_name, t.object_type, NULL as object_schema " +
-                            "  from user_objects t " +
-                            " where t.generated = 'N' " +
-                            "   and not exists (select 1 " +
-                            "          from user_nested_tables unt" +
-                            "         where t.object_name = unt.table_name)" +
-                            " UNION ALL " +
-                         	" select rname, 'REFRESH_GROUP', NULL " +
-                         	" from user_refresh a ",
-                    new UserObjectRowMapper());
-        } else {
-            return getJdbcTemplate().query(
-                    "select t.object_name, t.object_type, t.owner as object_schema " +
-                            "  from dba_objects t " +
-                            " where t.generated = 'N' " +
-                            "   and t.owner = '" + schema + "' " +
-                            "   and not exists (select 1 " +
-                            "          from user_nested_tables unt" +
-                            "         where t.object_name = unt.table_name)" +
-                     " UNION ALL " +
-                     	" select rname, 'REFRESH_GROUP', rowner " +
-                     	" from dba_refresh a " +
-                     	" where a.rowner = '" + schema + "' ",
-                    new UserObjectRowMapper());
-        }
+    public List<UserObject> findListForProccessing() {
+        return getJdbcTemplate().query(
+                "select t.object_name, t.object_type " +
+                        "  from user_objects t " +
+                        " where t.generated = 'N' " +
+                        "   and not exists (select 1 " +
+                        "          from user_nested_tables unt" +
+                        "         where t.object_name = unt.table_name)" +
+                " UNION ALL " +
+                        " select rname, 'REFRESH GROUP', NULL " +
+                        " from user_refresh a ",
+                new UserObjectRowMapper());
     }
 
     public List<UserObject> findPublicDbLinks() {
         return getJdbcTemplate().query(
-                "select db_link as object_name, 'PUBLIC DATABASE LINK' as object_type, 'PUBLIC' as object_schema " +
+                "select db_link as object_name, 'PUBLIC DATABASE LINK' as object_type " +
                         "from DBA_DB_LINKS " +
                         "where owner='PUBLIC'",
                 new UserObjectRowMapper());
     }
 
-    public List<UserObject> findDmbsJobs(String schema) {
-        if (schema == null) {
-            return getJdbcTemplate().query(
-                    "select job || '' as object_name, 'DBMS JOB' as object_type, NULL as object_schema " +
-                            "from user_jobs " +
-                            "where schema_user != 'SYSMAN'",
-                    new UserObjectRowMapper());
-        } else {
-            return getJdbcTemplate().query(
-                    "select job || '' as object_name, 'DBMS JOB' as object_type, schema_user as object_schema " +
-                            "from dba_jobs " +
-                            "where schema_user = '" + schema + "'",
-                    new UserObjectRowMapper());
-        }
+    public List<UserObject> findDmbsJobs() {
+        return getJdbcTemplate().query(
+                "select job || '' as object_name, 'DBMS JOB' as object_type " +
+                        "from user_jobs " +
+                        "where schema_user != 'SYSMAN'",
+                new UserObjectRowMapper());
     }
 
-    public String findPrimaryDDL(final String type, final String name, final String schema) {
-        return executeDbmsMetadataGetDdl("select dbms_metadata.get_ddl(?, ?, ?) from dual", type, name, schema);
+    public String findPrimaryDDL(final String type, final String name) {
+        return executeDbmsMetadataGetDdl("select dbms_metadata.get_ddl(?, ?) from dual", type, name);
     }
 
-    private String executeDbmsMetadataGetDdl(final String query, final String type, final String name, final String schema) {
+    private String executeDbmsMetadataGetDdl(final String query, final String type, final String name) {
         return (String) getJdbcTemplate().execute(new ConnectionCallback() {
             public String doInConnection(Connection connection) throws SQLException, DataAccessException {
                 applyTransformParameters(connection);
                 PreparedStatement ps = connection.prepareStatement(query);
                 ps.setString(1, type);
                 ps.setString(2, name);
-                ps.setString(3, schema);
-                ResultSet rs = ps.executeQuery();
+                ResultSet rs = null;
+                try {
+                    rs = ps.executeQuery();
+                }
+                catch (SQLException e){
+                    log.error(String.format("Error during select dbms_metadata.get_ddl('%s', '%s') from dual\n" +
+                            "Try to exclude type '%s' in advanced config excludes section\n", type, name, map2TypeForConfig(type)));
+                    log.error(String.format("Sample:\n\n" +
+                            " <util:map id=\"excludes\">\n" +
+                            "...\n" +
+                            "         <entry key=\"%s\">\n" +
+                            "            <set>\n" +
+                            "                <value>%s</value>\n" +
+                            "            </set>\n" +
+                            "        </entry>\n" +
+                            "...\n" +
+                            "</util:map>", map2TypeForConfig(type), name));
+                    throw e;
+                }
                 try {
                     if (rs.next()) {
                         return rs.getString(1).trim();
                     }
-                } finally {
+                }
+
+                finally {
                     rs.close();
                 }
                 return null;
@@ -101,22 +100,21 @@ public class UserObjectDaoImpl extends JdbcDaoSupport implements UserObjectDao {
         });
     }
 
-    public String findDependentDLLByTypeName(final String type, final String name, final String schema) {
+    public String findDependentDLLByTypeName(final String type, final String name) {
 
         return (String) getJdbcTemplate().execute(new ConnectionCallback() {
-            final String query = "select dbms_metadata.get_dependent_ddl(?, ?, ?) from dual";
+            final String query = "select dbms_metadata.get_dependent_ddl(?, ?) from dual";
 
             public Object doInConnection(Connection connection) throws SQLException, DataAccessException {
                 applyTransformParameters(connection);
                 PreparedStatement ps = connection.prepareStatement(query);
                 ps.setString(1, type);
                 ps.setString(2, name);
-                ps.setString(3, schema);
                 ResultSet rs;
                 try {
                     rs = ps.executeQuery();
                 } catch (SQLException e) {
-                    log.trace(String.format("Error during select dbms_metadata.get_dependent_ddl(%s, %s, %s) from dual", type, name, schema));
+                    log.trace(String.format("Error during select dbms_metadata.get_dependent_ddl(%s, %s) from dual", type, name));
                     return "";
                 }
                 try {
@@ -132,31 +130,14 @@ public class UserObjectDaoImpl extends JdbcDaoSupport implements UserObjectDao {
     }
 
     public String findDDLInPublicScheme(String type, String name) {
-        return executeDbmsMetadataGetDdl("select dbms_metadata.get_ddl(?, ?, ?) from dual", type, name, "PUBLIC");
+        return executeDbmsMetadataGetDdl("select dbms_metadata.get_ddl(?, ?, 'PUBLIC') from dual", type, name);
     }
 
-    public String findDbmsJobDDL(String name, boolean asSysDBA) {
-        if (asSysDBA) return findDbmsJobDdlAsSysDba(name);
-        else return findDbmsJobDdl(name);
-    }
-
-    public String findDbmsJobDdl(String name) {
+    public String findDbmsJobDDL(String name) {
         return (String) getJdbcTemplate().execute("DECLARE\n" +
                 " callstr VARCHAR2(4096);\n" +
                 "BEGIN\n" +
                 "  dbms_job.user_export(" + name + ", callstr);\n" +
-                ":done := callstr; " +
-                "END;", new CallableStatementCallbackImpl());
-    }
-
-    private String findDbmsJobDdlAsSysDba(String name) {
-        /*
-         *  The 'dbms_job.user_export' function does not work with sys/dba users (can't find users jobs). :(
-         */
-        return (String) getJdbcTemplate().execute("DECLARE\n" +
-                " callstr VARCHAR2(4096);\n" +
-                "BEGIN\n" +
-                "  dbms_ijob.full_export(" + name + ", callstr);\n" +
                 ":done := callstr; " +
                 "END;", new CallableStatementCallbackImpl());
     }
@@ -202,7 +183,6 @@ public class UserObjectDaoImpl extends JdbcDaoSupport implements UserObjectDao {
             UserObject userObject = new UserObject();
             userObject.setName(rs.getString("object_name"));
             userObject.setType(rs.getString("object_type"));
-            userObject.setSchema(rs.getString("object_schema"));
             return userObject;
         }
     }

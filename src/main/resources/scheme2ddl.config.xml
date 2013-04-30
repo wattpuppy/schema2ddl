@@ -11,15 +11,12 @@
 
     <bean id="dataSource" class="oracle.jdbc.pool.OracleDataSource">
         <property name="URL" value="jdbc:oracle:thin:@MyOracleHost:1521:MyDB"/>
-        <!-- You can choose a DBA user. For example: value="sys as sysdba" -->
         <property name="user" value="scott"/>
         <property name="password" value="tiger"/>
         <property name="connectionCachingEnabled" value="true"/>
     </bean>
 
     <bean id="reader" class="com.googlecode.scheme2ddl.UserObjectReader">
-        <!-- a comma separated list of schemas for processing. Workes only for DBA users -->
-        <!-- property name="processSchemas" value="SCOTT"/ -->
         <property name="userObjectDao" ref="userObjectDao"/>
         <property name="processPublicDbLinks" value="true"/>
         <property name="processDmbsJobs" value="true"/>
@@ -27,6 +24,8 @@
 
     <bean id="writer" class="com.googlecode.scheme2ddl.UserObjectWriter">
         <property name="outputPath" value="output"/>
+        <!-- use 'lower' or 'upper' for specify filename case rule -->
+        <property name="fileNameCase" value="lower"/>
     </bean>
 
 
@@ -49,10 +48,8 @@
          Formatting option can be unsafe because it based on regexp rules -->
         <property name="noFormat" value="false"/>
         <property name="statementOnNewLine" value="true"/>
-        <!-- Enabled 'isMorePrettyFormat' option disables the 'statementOnNewLine' option -->
-        <property name="isMorePrettyFormat" value="false"/>
-		<!-- 'filenameCase' can be 'lower' (default) or 'upper' -->
-        <property name="filenameCase" value="lower"/>
+        <!-- Enabled 'morePrettyFormat' option disables the 'statementOnNewLine' option -->
+        <property name="morePrettyFormat" value="false"/>
     </bean>
 
 
@@ -132,8 +129,20 @@
             </set>
         </entry>
 
+        <entry key="INDEX PARTITION">
+            <set>
+                <value>*</value>
+            </set>
+        </entry>
+
+        <entry key="LOB">
+            <set>
+                <value>*</value>
+            </set>
+        </entry>
+
         <!--Excluded, because all them persist in PACKAGE, TYPE and TABLE -->
-        <entry key="PACKAGE BODY">
+       <entry key="PACKAGE BODY">
             <set>
                 <value>*</value>
             </set>
